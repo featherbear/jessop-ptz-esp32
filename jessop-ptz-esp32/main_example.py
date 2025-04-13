@@ -19,6 +19,67 @@
 #     time.sleep(0.5)
 
 
+from machine import Pin
+
+TiltUpPin = Pin(5, Pin.OUT)
+TiltDownPin = Pin(6, Pin.OUT)
+PanLeftPin = Pin(7, Pin.OUT)
+PanRightPin = Pin(8, Pin.OUT)
+
+class StateController:
+    value: str
+
+    def setState(self, state: str):
+        self.value = state
+        if state == "Up":
+            TiltUpPin.value(1)
+            TiltDownPin.value(0)
+            PanLeftPin.value(0)
+            PanRightPin.value(0)
+        elif state == "Down":
+            TiltUpPin.value(0)
+            TiltDownPin.value(1)
+            PanLeftPin.value(0)
+            PanRightPin.value(0)
+        elif state == "Left":
+            TiltUpPin.value(0)
+            TiltDownPin.value(0)
+            PanLeftPin.value(1)
+            PanRightPin.value(0)
+        elif state == "Right":
+            TiltUpPin.value(0)
+            TiltDownPin.value(0)
+            PanLeftPin.value(0)
+            PanRightPin.value(1)
+        elif state == "UpLeft":
+            TiltUpPin.value(1)
+            TiltDownPin.value(0)
+            PanLeftPin.value(1)
+            PanRightPin.value(0)
+        elif state == "UpRight":
+            TiltUpPin.value(1)
+            TiltDownPin.value(0)
+            PanLeftPin.value(0)
+            PanRightPin.value(1)
+        elif state == "DownLeft":
+            TiltUpPin.value(0)
+            TiltDownPin.value(1)
+            PanLeftPin.value(1)
+            PanRightPin.value(0)
+        elif state == "DownRight":
+            TiltUpPin.value(0)
+            TiltDownPin.value(1)
+            PanLeftPin.value(0)
+            PanRightPin.value(1)
+        elif state == "Stop":
+            TiltUpPin.value(0)
+            TiltDownPin.value(0)
+            PanLeftPin.value(0)
+            PanRightPin.value(0)
+        else:
+            raise ValueError(f"Invalid state: {state}")
+S = StateController()
+
 # Connect to WiFi
 import network
 ssid = "awong6test"  # Replace with your WiFi SSID
@@ -137,7 +198,7 @@ PTZ_INQUIRY = [
     # 8x 09 06 11 FF     # capability   ?
 ]
 
-def handleBuffer(buffer, callbackFn=None):
+def handleBuffer(buffer):
     payloadType = None
     for key, value in PAYLOAD_TYPES.items():
         if buffer[0:2] == value:
@@ -194,19 +255,17 @@ def handleBuffer(buffer, callbackFn=None):
                         COMMAND_BUFFER[1] = buffer
                         SOCKET_NUMBER = 1
                     
-                    async def a():
-                        await asyncio.sleep(1)
-                        COMMAND_BUFFER[SOCKET_NUMBER] = None
-                        print("callback")
-                        callbackFn(PAYLOAD_TYPES["VISCA REPLY"], [0x90, 0x5 << 4 | SOCKET_NUMBER, 0xFF])
+                    COMMAND_BUFFER[SOCKET_NUMBER] = None
 
-                    a()
-                    return PAYLOAD_TYPES["VISCA REPLY"], [0x90, 0x4 << 4 | SOCKET_NUMBER, 0xFF]
+                    S.setState(direction)
+
+                    # Return straight away idk
+                    return [
+                        (PAYLOAD_TYPES["VISCA REPLY"], [0x90, 0x4 << 4 | SOCKET_NUMBER, 0xFF]),
+                        (PAYLOAD_TYPES["VISCA REPLY"], [0x90, 0x5 << 4 | SOCKET_NUMBER, 0xFF])
+                    ]
                 
-                    # TODO: Schedule
-                    # Completion
-                    print(PAYLOAD_TYPES["VISCA REPLY"], [0x90, 0x5 << 4 | SOCKET_NUMBER, 0xFF])
-
+                  
         elif payload[2] & 0xF0 == 0x20:
             # cancel
             SOCKET_NUMBER = payload[2] & 0x0F
@@ -272,26 +331,22 @@ def craftPayload(type, payload, seqNo: int):
 latestSeqNo = -1
 def doThing(buffer):
     global latestSeqNo
+
     seqNo = struct.unpack("<I", bytes(buffer[4:8]))[0]
-
-    def sendResult(
-            type,
-            payload
-    ):
-        # global seqNo
-        print(type, payload, seqNo)
-        result = craftPayload(type, payload, seqNo)
-        print("Sending result", result)
-
 
     if seqNo <= latestSeqNo:
         # responseType, response = 
-        sendResult(PAYLOAD_TYPES["CONTROL REPLY"], [0x0F, 0x01])
+        yield craftPayload(PAYLOAD_TYPES["CONTROL REPLY"], [0x0F, 0x01], seqNo)
 
     else:
-        sendResult(*handleBuffer(buffer, sendResult))
-        # responseType, response = handleBuffer(buffer)
+        response = handleBuffer(buffer)
         latestSeqNo = seqNo
+
+        if type(response) is tuple:
+            response = [response]
+
+        for r in response:
+            yield craftPayload(*r, seqNo)
 
 # doThing(PTZ_COMMAND)
 
@@ -300,13 +355,61 @@ import socket
 
 port = 52381
 
-# Create a UDP socket
-udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-udp_socket.bind(("0.0.0.0", port))  # Bind to all interfaces on port 12345
+# # Create a UDP socket
+# udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# udp_socket.bind(("0.0.0.0", port))  # Bind to all interfaces on port 12345
 
-print(f"UDP listener started on port {port}")
+# print(f"UDP listener started on port {port}")
+
+# while True:
+#     data, addr = udp_socket.recvfrom(1024)  # Receive up to 1024 bytes
+#     print("Received message:", data.decode("utf-8"), "from", addr)
+#     doThing(data)
+
+# Create a TCP server
+
+
+
+tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+while True:
+    try:
+        tcp_socket.bind(("0.0.0.0", port))  # Bind to all interfaces on the same port
+        tcp_socket.listen(5)  # Listen for up to 5 connections
+    except:
+        print("Port", port, "is in use, trying next port...")
+        port += 1
+    break
+
+print(f"TCP server started on port {port}")
+
+import time
+
+i = 0
+async def handle_tcp_client(client_socket, addr):
+    global i
+    print(f"New TCP connection from {addr}")
+    try:
+        while True:
+            data = client_socket.recv(1024)  # Receive up to 1024 bytes
+            if not data:
+                break
+            print("Got data, len is", len(data), list(data), data)
+            i += 1
+
+            valueCounter = 0
+            for payload in doThing(craftPayload(PAYLOAD_TYPES['VISCA COMMAND'], data, i)):
+                # if valueCounter > 0:
+                #     print("Simulating delay in multi-response\n\n")
+                #     time.sleep(0.5)
+                client_socket.sendall(bytes(payload[8:]))
+                valueCounter += 1
+    except Exception as e:
+        print(e)
+        print(f"Error handling TCP client {addr}: {e}")
+    finally:
+        client_socket.close()
+        print(f"Connection closed for {addr}")
 
 while True:
-    data, addr = udp_socket.recvfrom(1024)  # Receive up to 1024 bytes
-    print("Received message:", data.decode("utf-8"), "from", addr)
-    doThing(data)
+    client_socket, addr = tcp_socket.accept()  # Accept a new connection
+    asyncio.run(handle_tcp_client(client_socket, addr))
